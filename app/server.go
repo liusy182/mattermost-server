@@ -34,6 +34,7 @@ import (
 	"github.com/mattermost/mattermost-server/v5/plugin"
 	"github.com/mattermost/mattermost-server/v5/services/cache"
 	"github.com/mattermost/mattermost-server/v5/services/cache/lru"
+	"github.com/mattermost/mattermost-server/v5/services/cache2"
 	"github.com/mattermost/mattermost-server/v5/services/filesstore"
 	"github.com/mattermost/mattermost-server/v5/services/httpservice"
 	"github.com/mattermost/mattermost-server/v5/services/imageproxy"
@@ -102,9 +103,9 @@ type Server struct {
 	newStore func() store.Store
 
 	htmlTemplateWatcher     *utils.HTMLTemplateWatcher
-	sessionCache            cache.Cache
-	seenPendingPostIdsCache cache.Cache
-	statusCache             cache.Cache
+	sessionCache            cache2.Cache
+	seenPendingPostIdsCache cache2.Cache
+	statusCache             cache2.Cache
 	configListenerId        string
 	licenseListenerId       string
 	logListenerId           string
@@ -154,6 +155,8 @@ type Server struct {
 	Saml             einterfaces.SamlInterface
 
 	CacheProvider cache.Provider
+
+	CacheProvider2 cache2.Provider
 
 	tracer                      *tracing.Tracer
 	timestampLastDiagnosticSent time.Time
@@ -240,9 +243,20 @@ func NewServer(options ...Option) (*Server, error) {
 
 	s.CacheProvider.Connect()
 
-	s.sessionCache = s.CacheProvider.NewCache(model.SESSION_CACHE_SIZE)
-	s.seenPendingPostIdsCache = s.CacheProvider.NewCache(PENDING_POST_IDS_CACHE_SIZE)
-	s.statusCache = s.CacheProvider.NewCache(model.STATUS_CACHE_SIZE)
+	s.CacheProvider2 = cache2.NewProvider()
+	if err := s.CacheProvider2.Connect(); err != nil {
+		return nil, errors.Wrapf(err, "Unable to connect to cache provider");
+	}
+
+	s.sessionCache = s.CacheProvider2.NewCache(&cache2.CacheOptions{
+		Size: model.SESSION_CACHE_SIZE,
+	})
+	s.seenPendingPostIdsCache = s.CacheProvider2.NewCache(&cache2.CacheOptions{
+		Size: PENDING_POST_IDS_CACHE_SIZE,
+	})
+	s.statusCache = s.CacheProvider2.NewCache(&cache2.CacheOptions{
+		Size: model.STATUS_CACHE_SIZE,
+	})
 
 	if err := s.RunOldAppInitialization(); err != nil {
 		return nil, err
@@ -482,6 +496,13 @@ func (s *Server) Shutdown() error {
 
 	if s.CacheProvider != nil {
 		s.CacheProvider.Close()
+	}
+
+	if s.CacheProvider2 != nil {
+		err = s.CacheProvider2.Close()
+		if err != nil {
+			mlog.Error("Error in closing CacheProvider", mlog.Err(err))
+		}
 	}
 
 	mlog.Info("Server stopped")
